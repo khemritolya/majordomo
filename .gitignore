@@ -1,0 +1,6 @@
+/target
+ngrok
+.idea/
+majordomo.iml
+handlers.json
+api_keys.json

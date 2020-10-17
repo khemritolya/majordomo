@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Majordomo 404 Page</title>
+    </head>
+    <body>
+        <span>Unable to find the URL <!--uri-link--> on this server.</span>
+        <span>Redirecting to the project homepage in <span id="time">10</span> seconds...</span>
+    </body>
+    <script>
+        var redirectIn = function(seconds) {
+            if (seconds <= 0) {
+                window.location.href = "https://github.com/khemritolya/majordomo";
+            } else {
+                setTimeout(function() {
+                    document.getElementById("time").innerText = "" + seconds;
+                    redirectIn(seconds - 1);
+                }, 1000);
+            }
+        }
+
+        redirectIn(10);
+    </script>
+</html>

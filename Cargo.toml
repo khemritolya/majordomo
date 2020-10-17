@@ -1,0 +1,18 @@
+[package]
+name = "majordomo"
+version = "0.0.1"
+authors = ["Luis Hoderlein <lrh74@cornell.edu>"]
+edition = "2018"
+
+[dependencies]
+rocket = "0.4.5"
+reqwest = { version = "0.10.8", features = ["blocking"]}
+rand = "0.7.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+rhai = { version = "0.18", features = ["sync", "serde"] }
+
+[dependencies.rocket_contrib]
+version = "0.4.5"
+default-features = false
+features = ["json"]
