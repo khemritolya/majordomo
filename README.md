@@ -12,11 +12,12 @@ Majordomo does this by allowing you to create **handlers**, which are bits of co
 
 1. Think about some action you want to automate.
     <!-- TODO: update this once slack & github integration are out -->
-    For example, if you wanted an endpoint to echo back whatever is posted to it.
+    For example, say you wanted an endpoint to forward whatever is sent to it to slack.
     Consider the handler we would write in this situtation:
 
     ```rust <!-- it's not rust it's Rhai. There is no Rhai syntax highlighting :( -->
    fn handle(v) {
+       slack_post("majordomo-testing-channel", v);
        v
    } 
    ```
@@ -35,4 +36,4 @@ Majordomo does this by allowing you to create **handlers**, which are bits of co
    curl -X POST https://[addr]/h/example -d "Hello World" 
    ```
    
-   Will respond with the json `{"status":true,"data":"Hello World"}`. If there had been any errors along the way, the status becomes false, and data contains a helpful error message!
+   This now posts "Hello World" to "#majordomo-testing-channel" on slack. It will also respond with the json `{"status":true,"data":"Hello World"}`. If there had been any errors along the way, the status becomes false, and data contains a helpful error message! 
