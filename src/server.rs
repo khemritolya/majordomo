@@ -1,25 +1,23 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
-use std::sync::RwLock;
 use std::ops::{Deref, DerefMut};
+use std::sync::RwLock;
 
-use super::rocket::config::Environment;
-use super::rocket::logger::LoggingLevel;
-use super::rocket::response::content::Html;
-use super::rocket::response::Redirect;
-use super::rocket::{Config, Request, State};
+use rocket::config::Environment;
+use rocket::logger::LoggingLevel;
+use rocket::response::content::Html;
+use rocket::response::Redirect;
+use rocket::{Config, Request, State};
 
-use super::rocket_contrib::json::Json;
+use rocket_contrib::json::Json;
 
-use super::rhai::{Engine, Scope};
+use rhai::{Engine, ImmutableString, Module, Scope};
 
-use super::reqwest::StatusCode;
-use super::reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use super::reqwest::blocking;
-use super::reqwest::blocking::{Client, Response};
+use reqwest::blocking::{Client, Response};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 
-use super::types::{Handler, UpsertHandlerRequest, UserResponse};
+use crate::types::{EnvInfo, Handler, UpsertHandlerRequest, UserResponse};
 
 /// A Type Alias to Emulate a Database of type V, indexed by a key type K
 /// This is:
@@ -31,20 +29,37 @@ type Collection<'a, K, V> = State<'a, RwLock<HashMap<K, V>>>;
 ///
 /// # Arguments
 ///
-///
-fn slack_post_interal(client: Client, token: String, channel: String, message: String) -> bool {
+/// * `client` - A reqwest HTTP "client" to make the request. Never seen by Clients
+/// * `token` - The slack token to authenticate with. Never seen by Clients
+/// * `channel` - The channel to post to. Specified by the Clients
+/// * `message` - The message to send. Specified by the Clients
+fn slack_post_internal(client: &Client, token: &String, channel: String, message: String) -> bool {
+    if token == "no-slack" {
+        return false;
+    }
+
     let mut headers = HeaderMap::new();
     headers.insert(AUTHORIZATION, format!("Bearer {}", token).parse().unwrap());
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
-    let req: Result<Response, _> = client.post("https://slack.com/api/chat.postMessage")
+    let req: Result<Response, _> = client
+        .post("https://slack.com/api/chat.postMessage")
         .headers(headers)
-        .body(format!("{{ \"channel\": \"{}\", \"text\": \"{}\"}}", channel, message))
+        .body(format!(
+            "{{ \"channel\": \"{}\", \"text\": \"{}\"}}",
+            channel, message
+        ))
         .send();
 
     match req {
-        Ok(r) => { println!("{}", r.status()); r.status() == StatusCode::OK},
-        Err(e) => { println!("{}", e); false }
+        Ok(r) => match r.text() {
+            Ok(text) => text.contains("\"ok\":true"),
+            Err(_) => false,
+        },
+        Err(e) => {
+            println!("\t=> {}", e);
+            false
+        }
     }
 }
 
@@ -52,11 +67,13 @@ fn slack_post_interal(client: Client, token: String, channel: String, message: S
 ///
 /// # Arguments
 ///
+/// * `env` - Environment variables
 /// * `handlers` - A reference to the collection of User created handlers, indexed by their uris
 /// * `handler_addr` - The address of the handler that the User has invoked
 /// * `post_data` - Any post data that the client has passed alone with the request
 #[post("/h/<handler_addr>", data = "<post_data>")]
 fn call_handler(
+    env: State<EnvInfo>,
     handlers: Collection<String, Handler>,
     handler_addr: String,
     post_data: String,
@@ -66,14 +83,42 @@ fn call_handler(
 
     match map.get(&handler_addr) {
         Some(handler) => {
-            let engine = Engine::new();
-            let mut scope = Scope::new();
+            // Provide a way for Client code to make slack requests
+            // Note that the API exposed to clients does not allow them to specify a token
+            // That is hidden away, and never exposed to Rhai, so it cannot be leaked
+            let client = Client::new();
+            let tok = env.slack_token.clone();
+            let slack_post = move |channel: ImmutableString, message: ImmutableString| {
+                println!(
+                    "\t=> /h/{} made a slack message in channel #{}: {}",
+                    handler_addr, channel, message
+                );
+                Ok(slack_post_internal(
+                    &client,
+                    &tok,
+                    channel.into(),
+                    message.into(),
+                ))
+            };
 
-            let result = engine.call_fn(&mut scope, &handler.code.0, "handle", (post_data,));
+            // Register the various functions available to clients
+            let mut module = Module::new();
+            module.set_fn_2("slack_post", slack_post);
+
+            let mut engine = Engine::new();
+            engine.load_package(module);
+            let engine = engine;
+
+            // Run the client's code in response to user request
+            let mut scope = Scope::new();
+            let result = engine.call_fn(&mut scope, &handler.code.ast, "handle", (post_data,));
+
             match result {
                 Ok(res) => Json(UserResponse::success_with_data(res)),
-                // TODO log the error, and ping client about it
-                Err(_) => Json(UserResponse::failure("Error running client code!".into())),
+                Err(e) => {
+                    println!("\t=> Error running client code: {}", e);
+                    Json(UserResponse::failure("Error running client code!".into()))
+                }
             }
         }
         None => {
@@ -96,7 +141,7 @@ fn call_handler(
 /// **NOT** part of the User's post requests in any way
 #[post("/upsert_handler", data = "<post_data>")]
 fn upsert_handler(
-    handlers_path: State<String>,
+    env: State<EnvInfo>,
     api_keys: Collection<String, ()>,
     handlers: Collection<String, Handler>,
     post_data: Json<UpsertHandlerRequest>,
@@ -137,10 +182,12 @@ fn upsert_handler(
         }
     }
 
-    match save_map(&map, handlers_path.inner()) {
+    match save_map(&map, &env.handlers_path) {
         Ok(_) => Json(UserResponse::success()),
-        // TODO if this ever happens, ping about it on slack
-        Err(_) => Json(UserResponse::failure("Server error while saving db".into())),
+        Err(_) => {
+            println!("\t=> Unable to save db to file!");
+            Json(UserResponse::failure("Server error while saving db".into()))
+        }
     }
 }
 
@@ -214,8 +261,15 @@ fn unprocessable_entity(req: &Request) -> Json<UserResponse> {
 ///
 /// # Arguments
 ///
+/// * `slack_token` - A slack token to work with, or "no-slack"
+/// * `github_token` - A github token to work with, or "no-github"
+/// * `handlers_path` - The file path to save the handlers to
+/// * `handlers` - A map of uris to the handlers that have that uri
+/// * `api_keys` - A hash set of api keys. HashMap<T, ()> is basically the same as HashSet<T>
 /// * `port` - the port to start the server on
 pub fn http_server_start(
+    slack_token: String,
+    github_token: String,
     handlers_path: String,
     handlers: HashMap<String, Handler>,
     api_keys: HashMap<String, ()>,
@@ -227,13 +281,16 @@ pub fn http_server_start(
         .finalize()
         .unwrap();
 
-    let client = blocking::Client::new();
-    //slack_post_interal(client, "".into(), "majordomo-testing-channel".into(), "Hello World!".into());
+    let env = EnvInfo {
+        slack_token,
+        github_token,
+        handlers_path,
+    };
 
     let rocket = rocket::custom(config)
         .mount("/", routes![root_redirect, call_handler, upsert_handler])
         .register(catchers![not_found, bad_request, unprocessable_entity])
-        .manage(handlers_path)
+        .manage(env)
         .manage(RwLock::new(handlers))
         .manage(RwLock::new(api_keys));
 

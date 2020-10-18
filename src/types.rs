@@ -1,17 +1,30 @@
 use std::fmt;
 use std::fmt::Debug;
 
-use super::serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-use super::rhai::{Engine, ParseError, AST};
 use serde::export::Formatter;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-/// A Wrapper Type which allows us to serialize and deserialize the AST
-pub struct ASTBox(pub AST, pub String);
+use rhai::{Engine, ParseError, AST};
+
+/// A wrapper type which contains immutable state information for the server
+pub struct EnvInfo {
+    /// The slack token for Majordomo
+    pub slack_token: String,
+    /// The github token for Majordomo
+    pub github_token: String,
+    /// The filepath to save the handlers to
+    pub handlers_path: String,
+}
+
+/// A wrapper type which allows us to serialize and deserialize the AST
+pub struct ASTBox {
+    pub ast: AST,
+    pub raw: String,
+}
 
 impl Debug for ASTBox {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-        write!(f, "\"{}\"", self.1)
+        write!(f, "\"{}\"", self.raw)
     }
 }
 
@@ -35,13 +48,13 @@ impl Handler {
         Ok(Handler {
             uri,
             api_key,
-            code: ASTBox { 0: ast, 1: code },
+            code: ASTBox { ast, raw: code },
         })
     }
 }
 
 fn serialize_astbox<S: Serializer>(astbox: &ASTBox, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(&astbox.1)
+    s.serialize_str(&astbox.raw)
 }
 
 fn deserialize_astbox<'de, D: Deserializer<'de>>(d: D) -> Result<ASTBox, D::Error> {
@@ -51,7 +64,7 @@ fn deserialize_astbox<'de, D: Deserializer<'de>>(d: D) -> Result<ASTBox, D::Erro
         .compile(&code)
         .map_err(|_| serde::de::Error::custom("Unable to compile!"))?;
 
-    Ok(ASTBox { 0: ast, 1: code })
+    Ok(ASTBox { ast, raw: code })
 }
 
 /// Represents a client's request to create/update a handler

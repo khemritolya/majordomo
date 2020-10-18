@@ -40,6 +40,14 @@ fn main() {
 
     let api_keys_path = env::var("API_KEYS_PATH").unwrap_or("api_keys.json".into());
 
+    let slack_token = env::var("SLACK_TOKEN").unwrap_or("no-slack".into());
+
+    if slack_token == "no-slack" {
+        println!("No slack token specified! This will disable slack functionality.")
+    }
+
+    let github_token = env::var("GITHUB_TOKEN").unwrap_or("no-github".into());
+
     // Load in any saved handlers
     let handlers_raw_data = fs::read_to_string(Path::new(&handlers_path)).ok();
 
@@ -66,8 +74,15 @@ fn main() {
 
     let api_keys = HashMap::from_iter(api_keys_vec.iter().map(|i| (i.clone(), ())));
 
-    println!("Loaded handlers from {}: {:?}", handlers_path, handlers);
-    println!("Loaded in api keys from {}: {:?}", api_keys_path, api_keys);
+    println!("Loaded {} Handlers from {}", handlers.len(), handlers_path);
+    println!("Loaded {} API Keys from {}", api_keys.len(), api_keys_path);
 
-    http_server_start(handlers_path, handlers, api_keys, port);
+    http_server_start(
+        slack_token,
+        github_token,
+        handlers_path,
+        handlers,
+        api_keys,
+        port,
+    );
 }
