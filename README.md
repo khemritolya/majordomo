@@ -19,7 +19,7 @@ Majordomo does this by allowing you to create **handlers**, which are bits of co
    fn handle(v) {
        slack_post("majordomo-testing-channel", v);
        v
-   } 
+   }
    ```
 
 2. Obtain an API Key (for now talk to [@khemritolya](https://github.com/khemritolya) )
@@ -27,7 +27,7 @@ Majordomo does this by allowing you to create **handlers**, which are bits of co
 3. Create your handler by POST-ing to the endpoint
 
     ```shell script
-   curl -X POST https://[addr]/upsert_handler -d "{\"uri\":\"example\", \"code\":\"fn handle(v) { v } \", \"api_key\":\"[your api key]\"}"
+   curl -X POST https://[addr]/upsert_handler -d "{\"uri\":\"example\", \"code\":\"fn handle(v) { slack_post("majordomo-testing-channel", v); v } \", \"api_key\":\"[your api key]\"}"
    ```
 
 4. Make calls to the handler in your project!
