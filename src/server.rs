@@ -8,7 +8,7 @@ use rocket::config::Environment;
 use rocket::logger::LoggingLevel;
 use rocket::response::content::Html;
 use rocket::response::Redirect;
-use rocket::{Config, Request, State};
+use rocket::{Config, Request, Rocket, State};
 
 use rocket_contrib::json::Json;
 
@@ -17,13 +17,36 @@ use rhai::{Engine, ImmutableString, Module, Scope};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 
-use crate::types::{EnvInfo, Handler, UpsertHandlerRequest, UserResponse};
+use crate::types::{
+    EnvInfo, GenericOkResponse, Handler, SlackConversationInfoResponse, SlackEvent,
+    UpsertHandlerRequest, UserResponse,
+};
+use serde::de::DeserializeOwned;
 
 /// A Type Alias to Emulate a Database of type V, indexed by a key type K
 /// This is:
 /// * Faster than a real db in this use-case
 /// * Sufficient for our purposes
 type Collection<'a, K, V> = State<'a, RwLock<HashMap<K, V>>>;
+
+fn try_parse_response<T: DeserializeOwned>(req: Option<Response>) -> Option<T> {
+    match req {
+        Some(r) => match r.text() {
+            Ok(text) => {
+                println!("{}", text);
+                match text.parse() {
+                    Ok(v) => serde_json::from_value(v).ok(),
+                    Err(t) => {
+                        println!("Unexpected error triggered! {}", t.to_string());
+                        None
+                    }
+                }
+            }
+            Err(_) => None,
+        },
+        None => None,
+    }
+}
 
 /// Post a message to Slack
 ///
@@ -51,15 +74,11 @@ fn slack_post_internal(client: &Client, token: &String, channel: String, message
         ))
         .send();
 
-    match req {
-        Ok(r) => match r.text() {
-            Ok(text) => text.contains("\"ok\":true"),
-            Err(_) => false,
-        },
-        Err(e) => {
-            println!("\t=> {}", e);
-            false
-        }
+    let msg: Option<GenericOkResponse> = try_parse_response(req.ok());
+    println!("\t=> Slack: {:?}", msg);
+    match msg {
+        Some(i) => i.ok,
+        None => false,
     }
 }
 
@@ -87,15 +106,16 @@ fn call_handler(
             // Note that the API exposed to clients does not allow them to specify a token
             // That is hidden away, and never exposed to Rhai, so it cannot be leaked
             let client = Client::new();
-            let tok = env.slack_token.clone();
+            let slack_token = env.slack_token.clone();
             let slack_post = move |channel: ImmutableString, message: ImmutableString| {
                 println!(
                     "\t=> /h/{} made a slack message in channel #{}: {}",
                     handler_addr, channel, message
                 );
+
                 Ok(slack_post_internal(
                     &client,
-                    &tok,
+                    &slack_token,
                     channel.into(),
                     message.into(),
                 ))
@@ -107,6 +127,7 @@ fn call_handler(
 
             let mut engine = Engine::new();
             engine.load_package(module);
+            engine.set_max_operations(1000);
             let engine = engine;
 
             // Run the client's code in response to user request
@@ -212,6 +233,49 @@ fn save_map(map: &HashMap<String, Handler>, path: &String) -> Result<(), std::io
     Ok(())
 }
 
+/// Accept inbound slack connections
+/// Also doubles as an automatic Slack challenge guard responder
+/// Just passes on the request to the appropriate handler
+#[post("/slack_redirector", data = "<post_data>")]
+fn slack_redirector(
+    env: State<EnvInfo>,
+    handlers: Collection<String, Handler>,
+    post_data: Json<SlackEvent>,
+) {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        format!("Bearer {}", &env.slack_token).parse().unwrap(),
+    );
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/x-www-form-urlencoded"),
+    );
+
+    let req: Result<Response, _> = Client::new()
+        .post(&format!(
+            "https://slack.com/api/conversations.info?channel={}",
+            &post_data.event.channel
+        ))
+        .headers(headers)
+        .send();
+
+    let resp: Option<SlackConversationInfoResponse> = try_parse_response(req.ok());
+    let name = match resp {
+        Some(data) => data.channel.name,
+        None => {
+            println!("\t=> Failure getting channel information!");
+            return;
+        }
+    };
+
+    let addr = format!("slack-{}", name);
+    let res = call_handler(env, handlers, addr, post_data.event.text.clone());
+    if !res.status {
+        println!("\t=> Something has errored internally on a slack message: {:?}", res.data)
+    }
+}
+
 /// Rocket Endpoint which redirects any User or Client who wants to use the service to the github
 /// Any information they need is there, and there is as yet no reason for them to see the homepage
 /// TODO: eventually, this will send the website, but not yet.
@@ -274,7 +338,7 @@ pub fn http_server_start(
     handlers: HashMap<String, Handler>,
     api_keys: HashMap<String, ()>,
     port: u16,
-) {
+) -> Rocket {
     let config = Config::build(Environment::Staging)
         .log_level(LoggingLevel::Normal)
         .port(port)
@@ -288,11 +352,19 @@ pub fn http_server_start(
     };
 
     let rocket = rocket::custom(config)
-        .mount("/", routes![root_redirect, call_handler, upsert_handler])
+        .mount(
+            "/",
+            routes![
+                root_redirect,
+                call_handler,
+                upsert_handler,
+                slack_redirector
+            ],
+        )
         .register(catchers![not_found, bad_request, unprocessable_entity])
         .manage(env)
         .manage(RwLock::new(handlers))
         .manage(RwLock::new(api_keys));
 
-    rocket.launch();
+    rocket
 }

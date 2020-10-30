@@ -111,3 +111,48 @@ impl UserResponse {
         }
     }
 }
+
+/// Represents the challenge send by slack
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SlackVerification {
+    pub token: String,
+    pub challenge: String,
+    #[serde(rename = "type")]
+    pub req_type: String,
+}
+
+/// Represents the standard
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SlackEvent {
+    pub token: String,
+    pub event: SlackEventInner,
+    pub event_time: i64,
+}
+
+/// Represents the inner event
+/// TODO: this only conforms to a text message. Too bad. No emoji reacts yet
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SlackEventInner {
+    #[serde(rename = "type")]
+    pub req_type: String,
+    pub channel: String,
+    pub user: String,
+    pub text: String,
+    pub ts: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct GenericOkResponse {
+    pub ok: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SlackConversationInfoResponse {
+    pub ok: bool,
+    pub channel: SlackConversationInfoResponseInner,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SlackConversationInfoResponseInner {
+    pub name: String,
+}

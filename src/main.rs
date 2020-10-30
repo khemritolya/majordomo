@@ -14,11 +14,19 @@ use std::fs;
 use std::iter::FromIterator;
 use std::path::Path;
 
+use rocket_contrib::json::Json;
+
 mod server;
 use server::http_server_start;
 
 mod types;
 use types::Handler;
+use types::SlackVerification;
+
+#[post("/slack_redirector", data = "<post_data>")]
+fn slack_redirector(post_data: Json<SlackVerification>) -> Json<String> {
+    Json(post_data.challenge.clone())
+}
 
 /// The main function of the entire program
 ///
@@ -29,12 +37,22 @@ use types::Handler;
 /// * TODO post about status on slack
 /// * Any other future initialization work
 fn main() {
+    // Allow us to respond to challenge slack thing
+    // Set CH_MODE=1 to respond to slack challenges
+    // Does not start any of the other server stuff, so you'll need to restart without CH_MODE=1 to
+    // allow us to actually run the server
+    if let Ok(_) = env::var("CH_MODE") {
+        let rocket = rocket::ignite().mount("/", routes![slack_redirector]);
+
+        rocket.launch();
+    }
+
     // Load environment variables
     let port = env::var("PORT")
         .ok()
         .map(|s| s.parse::<u16>().ok())
         .flatten()
-        .unwrap_or(17760);
+        .unwrap_or(8000);
 
     let handlers_path = env::var("HANDLER_PATH").unwrap_or("handlers.json".into());
 
@@ -77,7 +95,9 @@ fn main() {
     println!("Loaded {} Handlers from {}", handlers.len(), handlers_path);
     println!("Loaded {} API Keys from {}", api_keys.len(), api_keys_path);
 
-    http_server_start(
+    println!("{:?}", handlers);
+
+    let rocket = http_server_start(
         slack_token,
         github_token,
         handlers_path,
@@ -85,4 +105,6 @@ fn main() {
         api_keys,
         port,
     );
+
+    rocket.launch();
 }
