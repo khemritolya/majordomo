@@ -66,6 +66,10 @@ fn main() {
 
     let github_token = env::var("GITHUB_TOKEN").unwrap_or("no-github".into());
 
+    if github_token == "no-github" {
+        println!("No github token specified! This will disable github functionality.")
+    }
+
     // Load in any saved handlers
     let handlers_raw_data = fs::read_to_string(Path::new(&handlers_path)).ok();
 
@@ -94,8 +98,6 @@ fn main() {
 
     println!("Loaded {} Handlers from {}", handlers.len(), handlers_path);
     println!("Loaded {} API Keys from {}", api_keys.len(), api_keys_path);
-
-    println!("{:?}", handlers);
 
     let rocket = http_server_start(
         slack_token,

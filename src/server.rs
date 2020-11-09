@@ -15,11 +15,11 @@ use rocket_contrib::json::Json;
 use rhai::{Engine, ImmutableString, Module, Scope};
 
 use reqwest::blocking::{Client, Response};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 
 use crate::types::{
-    EnvInfo, GenericOkResponse, Handler, SlackConversationInfoResponse, SlackEvent,
-    UpsertHandlerRequest, UserResponse,
+    EnvInfo, GenericOkResponse, GithubIssueCreateResponse, Handler, SlackConversationInfoResponse,
+    SlackEvent, UpsertHandlerRequest, UserResponse,
 };
 use serde::de::DeserializeOwned;
 
@@ -37,7 +37,7 @@ fn try_parse_response<T: DeserializeOwned>(req: Option<Response>) -> Option<T> {
                 match text.parse() {
                     Ok(v) => serde_json::from_value(v).ok(),
                     Err(t) => {
-                        println!("Unexpected error triggered! {}", t.to_string());
+                        println!("\t=> Unexpected error triggered! {}", t.to_string());
                         None
                     }
                 }
@@ -69,7 +69,7 @@ fn slack_post_internal(client: &Client, token: &String, channel: String, message
         .post("https://slack.com/api/chat.postMessage")
         .headers(headers)
         .body(format!(
-            "{{ \"channel\": \"{}\", \"text\": \"{}\"}}",
+            "{{ \"channel\": \"{}\", \"text\": \"{}\", \"unfurl_links\": \"true\"}}",
             channel, message
         ))
         .send();
@@ -80,6 +80,31 @@ fn slack_post_internal(client: &Client, token: &String, channel: String, message
         Some(i) => i.ok,
         None => false,
     }
+}
+
+fn github_issue_create_internal(
+    client: &Client,
+    token: &String,
+    repo: String,
+    title: String,
+    body: String,
+) -> Option<GithubIssueCreateResponse> {
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, format!("token {}", token).parse().unwrap());
+    headers.insert(USER_AGENT, HeaderValue::from_static("dti-majordomo"));
+
+    let req: Result<Response, _> = client
+        .post(&format!("https://api.github.com/repos/{}/issues", repo))
+        .headers(headers)
+        .body(format!(
+            "{{ \"title\": \"{}\", \"body\": \"{}\"}}",
+            title, body
+        ))
+        .send();
+
+    let resp: Option<GithubIssueCreateResponse> = try_parse_response(req.ok());
+    println!("\t=> Github Issue Create: {:?}", resp);
+    resp
 }
 
 /// Rocket Endpoint which passes User Requests onto the Client provided handlers
@@ -107,10 +132,11 @@ fn call_handler(
             // That is hidden away, and never exposed to Rhai, so it cannot be leaked
             let client = Client::new();
             let slack_token = env.slack_token.clone();
+            let addr = handler_addr.clone();
             let slack_post = move |channel: ImmutableString, message: ImmutableString| {
                 println!(
                     "\t=> /h/{} made a slack message in channel #{}: {}",
-                    handler_addr, channel, message
+                    addr, channel, message
                 );
 
                 Ok(slack_post_internal(
@@ -121,13 +147,42 @@ fn call_handler(
                 ))
             };
 
+            // Provide a way for Client code to make slack requests
+            // Note that the API exposed to clients does not allow them to specify a token
+            // That is hidden away, and never exposed to Rhai, so it cannot be leaked
+            let client = Client::new();
+            let github_token = env.github_token.clone();
+            let addr = handler_addr.clone();
+            let github_issue_create = move |repo: ImmutableString, title: ImmutableString, body: ImmutableString| {
+                println!(
+                    "\t=> /h/{} created a new issue in {}, with title: {} and body: {}",
+                    addr, repo, title, body
+                );
+
+                github_issue_create_internal(
+                    &client,
+                    &github_token,
+                    repo.into(),
+                    title.into(),
+                    body.into()
+                ).ok_or("Test".into())
+            };
+
+            let debug_println = |string: ImmutableString| Ok(println!("{}", string));
+
             // Register the various functions available to clients
             let mut module = Module::new();
             module.set_fn_2("slack_post", slack_post);
+            module.set_fn_3("github_issue_create", github_issue_create);
+            module.set_fn_1("debug_println", debug_println);
 
             let mut engine = Engine::new();
             engine.load_package(module);
             engine.set_max_operations(1000);
+            engine.register_type::<GithubIssueCreateResponse>()
+                .register_get("url",GithubIssueCreateResponse::get_url)
+                .register_get("id", GithubIssueCreateResponse::get_id)
+                .register_get("title", GithubIssueCreateResponse::get_title);
             let engine = engine;
 
             // Run the client's code in response to user request
@@ -252,6 +307,12 @@ fn slack_redirector(
         HeaderValue::from_static("application/x-www-form-urlencoded"),
     );
 
+    // TODO Terrible hack to the get the name of the channel that this message was posted in
+    // One day, we may get an improved implementation
+    // For now, this just works, and that's ok!
+    // Alternative 1. Fetch this data once when the app starts
+    // Alternative 2. Allow only slack endpoints with the slack id as the uri
+    // That would be hard on the user though, and we can't have that!
     let req: Result<Response, _> = Client::new()
         .post(&format!(
             "https://slack.com/api/conversations.info?channel={}",
@@ -270,9 +331,14 @@ fn slack_redirector(
     };
 
     let addr = format!("slack-{}", name);
-    let res = call_handler(env, handlers, addr, post_data.event.text.clone());
+    let first_space = post_data.event.text.find(' ').unwrap_or(0);
+    let data = post_data.event.text.clone()[first_space..].to_string();
+    let res = call_handler(env, handlers, addr, data);
     if !res.status {
-        println!("\t=> Something has errored internally on a slack message: {:?}", res.data)
+        println!(
+            "\t=> Something has errored internally on a slack message: {:?}",
+            res.data
+        )
     }
 }
 

@@ -141,6 +141,7 @@ pub struct SlackEventInner {
     pub ts: String,
 }
 
+/// When a response has an Ok, and that ok is all we care about
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GenericOkResponse {
     pub ok: bool,
@@ -155,4 +156,28 @@ pub struct SlackConversationInfoResponse {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SlackConversationInfoResponseInner {
     pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct GithubIssueCreateResponse {
+    pub html_url: String,
+    pub title: String,
+    pub id: i32,
+}
+
+/// Rhai needs this to cooperate
+/// Why can't it just read public fields?
+/// We may never know
+impl GithubIssueCreateResponse {
+    pub fn get_url(&mut self) -> String {
+        self.html_url.clone()
+    }
+
+    pub fn get_title(&mut self) -> String {
+        self.title.clone()
+    }
+
+    pub fn get_id(&mut self) -> i32 {
+        self.id.clone()
+    }
 }
