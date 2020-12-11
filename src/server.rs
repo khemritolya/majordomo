@@ -437,7 +437,7 @@ fn slack_redirector(
 /// Rocket Endpoint which serves the frontend to any user
 #[get("/")]
 fn site_root() -> Html<String> {
-    if rand::thread_rng().gen_bool(0.5) {
+    if rand::thread_rng().gen_bool(0.3) {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
@@ -454,7 +454,7 @@ fn site_root() -> Html<String> {
     }
 }
 
-/// Rocket Endpoint which
+/// Rocket Endpoint which gets the suggestion box
 #[get("/suggestion-box.js")]
 fn suggestion_box_js() -> JavaScript<String> {
     JavaScript(include_str!("suggestion-box.js").into())
