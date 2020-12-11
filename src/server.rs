@@ -6,8 +6,7 @@ use std::sync::RwLock;
 
 use rocket::config::Environment;
 use rocket::logger::LoggingLevel;
-use rocket::response::content::Html;
-use rocket::response::Redirect;
+use rocket::response::content::{Html, JavaScript};
 use rocket::{Config, Request, Rocket, State};
 
 use rocket_contrib::json::Json;
@@ -17,11 +16,15 @@ use rhai::{Engine, ImmutableString, Module, Scope};
 use reqwest::blocking::{Client, Response};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 
-use crate::types::{
-    EnvInfo, GenericOkResponse, GithubIssueCreateResponse, Handler, SlackConversationInfoResponse,
-    SlackEvent, UpsertHandlerRequest, UserResponse,
-};
 use serde::de::DeserializeOwned;
+
+use rand::*;
+
+use crate::types::{
+    APIKeyRequest, EnvInfo, FindHandlerRequest, FindHandlerResponse, GenericOkResponse,
+    GithubIssueCreateResponse, Handler, SlackConversationInfoResponse, SlackEvent,
+    UpsertHandlerRequest, UserResponse,
+};
 
 /// A Type Alias to Emulate a Database of type V, indexed by a key type K
 /// This is:
@@ -153,20 +156,22 @@ fn call_handler(
             let client = Client::new();
             let github_token = env.github_token.clone();
             let addr = handler_addr.clone();
-            let github_issue_create = move |repo: ImmutableString, title: ImmutableString, body: ImmutableString| {
-                println!(
-                    "\t=> /h/{} created a new issue in {}, with title: {} and body: {}",
-                    addr, repo, title, body
-                );
+            let github_issue_create =
+                move |repo: ImmutableString, title: ImmutableString, body: ImmutableString| {
+                    println!(
+                        "\t=> /h/{} created a new issue in {}, with title: {} and body: {}",
+                        addr, repo, title, body
+                    );
 
-                github_issue_create_internal(
-                    &client,
-                    &github_token,
-                    repo.into(),
-                    title.into(),
-                    body.into()
-                ).ok_or("Test".into())
-            };
+                    github_issue_create_internal(
+                        &client,
+                        &github_token,
+                        repo.into(),
+                        title.into(),
+                        body.into(),
+                    )
+                    .ok_or("Test".into())
+                };
 
             let debug_println = |string: ImmutableString| Ok(println!("{}", string));
 
@@ -179,8 +184,9 @@ fn call_handler(
             let mut engine = Engine::new();
             engine.load_package(module);
             engine.set_max_operations(1000);
-            engine.register_type::<GithubIssueCreateResponse>()
-                .register_get("url",GithubIssueCreateResponse::get_url)
+            engine
+                .register_type::<GithubIssueCreateResponse>()
+                .register_get("url", GithubIssueCreateResponse::get_url)
                 .register_get("id", GithubIssueCreateResponse::get_id)
                 .register_get("title", GithubIssueCreateResponse::get_title);
             let engine = engine;
@@ -204,6 +210,58 @@ fn call_handler(
     }
 }
 
+/// Compute if a client is authorized or not
+/// TODO documentation
+fn check_auth(key: &String, api_keys: Collection<String, ()>) -> bool {
+    let guard = api_keys.read().unwrap();
+    let map = guard.deref();
+    map.contains_key(key)
+}
+
+/// Public wrapper around check auth
+/// TODO: documentation
+/// TODO: Maybe rethink over security policy here
+/// TODO: unused, and really should be removed!
+/// Is it really a good idea to allow anyone to test if a api key is valid?
+/// On the other hand, you can figure this out by calling other methods.
+#[post("/verify_key", data = "<post_data>")]
+fn verify_key(
+    api_keys: Collection<String, ()>,
+    post_data: Json<APIKeyRequest>,
+) -> Json<UserResponse> {
+    match check_auth(&post_data.0.api_key, api_keys) {
+        true => Json(UserResponse::success()),
+        false => Json(UserResponse::failure("Invalid API Key".into())),
+    }
+}
+
+/// List handlers
+/// TODO: Documentation
+/// TODO: rethink security policy here
+/// Is it a good idea that anyone with an API Key can see all endpoints?
+/// For now, it is...
+#[post("/list_handlers", data = "<post_data>")]
+fn list_handlers(
+    api_keys: Collection<String, ()>,
+    handlers: Collection<String, Handler>,
+    post_data: Json<APIKeyRequest>
+) -> Json<UserResponse> {
+    if !check_auth(&post_data.0.api_key, api_keys) {
+        return Json(UserResponse::failure("Invalid API Key".into()));
+    }
+
+    let guard = handlers.read().unwrap();
+    let map = guard.deref();
+
+    let handler_addrs = map.keys().map(String::clone).collect::<Vec<String>>();
+
+    Json(
+        UserResponse::success_with_raw(handler_addrs).unwrap_or(UserResponse::failure(
+            "Internal Server Error Code 2: Ping Luis Hoderlein about it".into(),
+        )),
+    )
+}
+
 /// Rocket Endpoint which allows Clients to create and update handlers.
 ///
 /// # Arguments
@@ -224,15 +282,9 @@ fn upsert_handler(
 ) -> Json<UserResponse> {
     let data = post_data.0;
 
-    // figure out if the user is auth'd
-    let auth = {
-        let guard = api_keys.read().unwrap();
-        let map = guard.deref();
-        map.contains_key(&data.api_key)
-    };
-
-    if !auth {
-        return Json(UserResponse::failure("Invalid auth token".into()));
+    // fail is user is not auth'd
+    if !check_auth(&data.api_key, api_keys) {
+        return Json(UserResponse::failure("Invalid API Key".into()));
     }
 
     let mut guard = handlers.write().unwrap();
@@ -286,6 +338,46 @@ fn save_map(map: &HashMap<String, Handler>, path: &String) -> Result<(), std::io
     let mut file = File::create(path)?;
     file.write_all(serde_json::to_string(map)?.as_ref())?;
     Ok(())
+}
+
+/// Check if a user is
+
+/// Fetch a particular handler
+/// TODO documentation
+#[post("/find_handler", data = "<post_data>")]
+fn find_handler(
+    api_keys: Collection<String, ()>,
+    handlers: Collection<String, Handler>,
+    post_data: Json<FindHandlerRequest>,
+) -> Json<UserResponse> {
+    let handler = post_data.0.uri;
+    let key = post_data.0.api_key;
+
+    // fail is user is not auth'd
+    if !check_auth(&key, api_keys) {
+        return Json(UserResponse::failure("Invalid API Key".into()));
+    }
+
+    let guard = handlers.read().unwrap();
+    let map = guard.deref();
+
+    match map.get(&handler) {
+        Some(h) => {
+            if h.api_key == key {
+                Json(
+                    UserResponse::success_with_raw(FindHandlerResponse {
+                        code: h.code.raw.clone(),
+                    })
+                    .unwrap_or(UserResponse::failure(
+                        "Internal Server Error Code 1: Ping Luis Hoderlein about it".into(),
+                    )),
+                )
+            } else {
+                Json(UserResponse::failure("Invalid API Key".into()))
+            }
+        }
+        None => Json(UserResponse::failure("Unknown handler uri".into())),
+    }
 }
 
 /// Accept inbound slack connections
@@ -342,12 +434,30 @@ fn slack_redirector(
     }
 }
 
-/// Rocket Endpoint which redirects any User or Client who wants to use the service to the github
-/// Any information they need is there, and there is as yet no reason for them to see the homepage
-/// TODO: eventually, this will send the website, but not yet.
+/// Rocket Endpoint which serves the frontend to any user
 #[get("/")]
-fn root_redirect() -> Redirect {
-    Redirect::to("https://github.com/khemritolya/majordomo")
+fn site_root() -> Html<String> {
+    if rand::thread_rng().gen_bool(0.5) {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+        // TODO: maybe handle the result
+        let _req: Result<Response, _> = Client::new()
+            .post("https://major.ngrok.io/h/awesome-endpoint-2")
+            .headers(headers)
+            .body("Hey, remember how you have that backend function that might have a critical error condition? Well, it was happened. Now you know!")
+            .send();
+
+        Html(include_str!("error_page.html").into())
+    } else {
+        Html(include_str!("site.html").into())
+    }
+}
+
+/// Rocket Endpoint which
+#[get("/suggestion-box.js")]
+fn suggestion_box_js() -> JavaScript<String> {
+    JavaScript(include_str!("suggestion-box.js").into())
 }
 
 /// Rocket Endpoint which catches any 404's due to User or Client requests.
@@ -421,10 +531,14 @@ pub fn http_server_start(
         .mount(
             "/",
             routes![
-                root_redirect,
+                site_root,
                 call_handler,
                 upsert_handler,
-                slack_redirector
+                slack_redirector,
+                list_handlers,
+                find_handler,
+                verify_key,
+                suggestion_box_js
             ],
         )
         .register(catchers![not_found, bad_request, unprocessable_entity])

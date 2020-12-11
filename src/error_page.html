@@ -5,13 +5,16 @@
         <title>Majordomo 404 Page</title>
     </head>
     <body>
-        <span>Unable to find the URL <!--uri-link--> on this server.</span>
-        <span>Redirecting to the project homepage in <span id="time">10</span> seconds...</span>
+    <span>Oh no! Something went wrong with the backend. We've filed an error on the majordomo slack channel!</span>
+    <br>
+    <span>(Don't worry! It was meant to happen, see: server.rs:440)</span>
+    <br>
+    <span>Redirecting to the main page in <span id="time">10</span> seconds...</span>
     </body>
     <script>
         var redirectIn = function(seconds) {
             if (seconds <= 0) {
-                window.location.href = "https://github.com/khemritolya/majordomo";
+                window.location.href = "http://major.ngrok.io";
             } else {
                 setTimeout(function() {
                     document.getElementById("time").innerText = "" + seconds;

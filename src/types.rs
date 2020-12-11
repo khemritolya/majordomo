@@ -78,6 +78,29 @@ pub struct UpsertHandlerRequest {
     pub code: String,
 }
 
+/// Represents a client's request to find out more about a handler
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FindHandlerRequest {
+    /// The uri of the handler to find
+    pub uri: String,
+    /// The API Key associated with the handler. Must match what is present in db!
+    pub api_key: String,
+}
+
+/// Represents the result of an attempt to find a handler
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FindHandlerResponse {
+    /// The code associated with this handler
+    pub code: String,
+}
+
+/// Represents a request which takes only an api key
+/// E.g. verify_key, list_handlers
+#[derive(Debug, Serialize, Deserialize)]
+pub struct APIKeyRequest {
+    pub api_key: String,
+}
+
 /// Represents the response to a User query
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserResponse {
@@ -101,6 +124,17 @@ impl UserResponse {
         UserResponse {
             status: true,
             data: Some(data),
+        }
+    }
+
+    pub fn success_with_raw<T: Serialize>(value: T) -> Option<UserResponse> {
+        let data = serde_json::to_string(&value);
+        match data {
+            Ok(s) => Some(UserResponse {
+                status: true,
+                data: Some(s),
+            }),
+            Err(_) => None,
         }
     }
 

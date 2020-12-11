@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Majordomo Portal</title>
+        <!-- TODO: this is bad. Do not do this -->
+        <style>
+            body {
+                background-color: grey;
+            }
+
+            h1 {
+                text-align: center;
+            }
+
+            #box {
+                position: absolute;
+                left: 50%;
+                margin-left: -210px;
+                background-color: white;
+                width: 400px;
+                padding: 20px;
+                border-radius: 10px;
+                text-align: left;
+                box-shadow: 6px 6px;
+            }
+
+            #non-box {
+                position: absolute;
+                max-width: 0px;
+                min-width: 0px;
+            }
+
+            #code-box {
+                width: 100%;
+                max-width: 100%;
+                min-width: 100%;
+                min-height: 400px;
+                max-height: 400px;
+                white-space: pre;
+                overflow-wrap: normal;
+                overflow-x: scroll;
+            }
+        </style>
+        <script src="/suggestion-box.js"></script>
+    </head>
+    <body>
+        <div id="box">
+            <h1>Majordomo Portal</h1>
+            <small>Author: Luis Hoderlein, 2020</small>
+            <hr>
+            <div id="inner-text-1">
+                <form>
+                    <label for="api-key-input">API Key:</label>
+                    <input id="api-key-input" name="api-key-input" type="text">
+                    <input type="button" value="Verify" onclick="verify()">
+                </form>
+            </div>
+        </div>
+        <div id="non-box">
+            <div id="inner-text-2" style="visibility: hidden">
+                <label for="handlers">Handlers:</label>
+                <select name="handlers" id="handlers" oninput="update()">
+                    <option selected>Choose a handler</option>
+                </select>
+                <button onclick="insert()">Create a new handler</button>
+            </div>
+            <div id="inner-text-3" style="visibility: hidden">
+                <p>Handler: <strong id="handler-title"></strong></p>
+                <p>Code:</p>
+                <textarea id="code-box"></textarea>
+                <button onclick="upload()">Upload New Handler Code</button>
+            </div>
+        </div>
+    </body>
+    <script>
+        // List of things that would make this script nices
+        // TODO break out into a script fetched from the server
+        // TODO remove calls to alert() and prompt() with something nicer
+        // TODO fix the way that which UI parts are shown to the user is generated
+        // TODO fix how the key is saved (might require some server-side rewrites?)
+
+        // the api key
+        var key = "nada";
+        var name = "nada";
+
+        const upload = function() {
+            const text = document.getElementById("code-box").value;
+            console.log(text);
+            send_json("upsert_handler", { api_key: key, uri: name, code: text }, function(data) {
+                if(data.status) {
+                    alert("Success!");
+
+                    swap(1, 2);
+                    swap(2, 3);
+                } else {
+                    alert(data.data);
+                }
+            });
+        }
+
+        // Create a new handler
+        const insert = function() {
+            // TODO: this is a bad way of doing it
+            name = prompt("Enter a name for the new handler:");
+            document.getElementById("handler-title").innerText = name;
+
+            swap(1,3);
+        }
+
+        // Allow the user to edit a handler
+        const update = function() {
+            name = document.getElementById("handlers").value;
+            send_json("find_handler", { api_key: key, uri: name }, function(data) {
+                if (data.status) {
+                    console.log(JSON.parse(data.data));
+                    document.getElementById("handler-title").innerText = name;
+
+                    document.getElementById("code-box").innerHTML = JSON.parse(data.data).code;
+                    swap(1,3);
+                } else {
+                    alert(data.data);
+                }
+            })
+        }
+
+        // TODO this is like the worst code I have ever written
+        const swap = function(i, j) {
+            const tmp = document.getElementById("inner-text-" + i).innerHTML;
+            document.getElementById("inner-text-" + i).innerHTML = document.getElementById("inner-text-" + j).innerHTML;
+            document.getElementById("inner-text-" + j).innerHTML = tmp;
+        }
+
+        // send some data to the server
+        const send_json = function(addr, data, callback) {
+            let xhr = new XMLHttpRequest();
+            xhr.open("POST", window.location.href + "/" + addr, true);
+            xhr.setRequestHeader("Content-type", "application/json");
+            xhr.send(JSON.stringify(data));
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    if (xhr.status === 200) {
+                        callback(JSON.parse(xhr.responseText))
+                    } else {
+                        alert("HTTP Error! Check your console!");
+                        console.log("Please send this information to Luis Hoderlein");
+                        console.log("Please also provide a short description of the error");
+                        console.log("You can do so on github @ https://github.com/khemritolya/majordomo or on slack!");
+                        console.log(xhr)
+                    }
+                }
+            }
+        }
+
+        // Verify that the API Key is correct
+        const verify = function() {
+            key = document.getElementById("api-key-input").value;
+            // TODO is this a bad idea? Probably. Too bad!
+            send_json("list_handlers", { api_key: key }, function(data) {
+                if (data.status) {
+                    // TODO: this is dumb. Too bad!
+                    swap(1, 2);
+
+                    document.getElementById("handlers").innerHTML = "<option selected>Choose a handler</option>\n" +
+                        JSON.parse(data.data).map(function(e) {
+                            return "<option>" + e + "</option>";
+                        }).join();
+                } else {
+                    alert(data.data);
+                }
+            });
+        }
+    </script>
+</html>
